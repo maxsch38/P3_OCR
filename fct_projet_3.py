@@ -8,7 +8,8 @@
 
 import matplotlib.pyplot as plt
 from matplotlib.transforms import Bbox
-
+import numpy as np
+from fuzzywuzzy import fuzz
 
 #############################################################################################################################
 def visu_graph_moy_nulle(liste_produits, liste_sante, liste_environnement, df_selection, save='n'):
@@ -139,3 +140,162 @@ def fill_median(ser):
     Remplacement de chaque valeur manquante par la valeur médiane de la colonne
     """
     return ser.fillna(value=ser.median())
+
+#############################################################################################################################
+def correlation_graph(pca, x_y, features) : 
+    """
+    Affiche le graphe des correlations
+
+    Positional arguments : 
+    -----------------------------------
+    pca : sklearn.decomposition.PCA : notre objet PCA qui a été fit
+    x_y : list ou tuple : le couple x,y des plans à afficher, exemple [0,1] pour F1, F2
+    features : list ou tuple : la liste des features (ie des dimensions) à représenter
+    """
+
+    # Extrait x et y 
+    x,y=x_y
+
+    # Taille de l'image (en inches)
+    fig, ax = plt.subplots(figsize=(10, 9))
+
+    # Pour chaque composante : 
+    for i in range(0, pca.components_.shape[1]):
+
+        # Les flèches
+        ax.arrow(0,0, 
+                pca.components_[x, i],  
+                pca.components_[y, i],  
+                head_width=0.07,
+                head_length=0.07, 
+                width=0.02, )
+
+        # Les labels
+        plt.text(pca.components_[x, i] + 0.05,
+                pca.components_[y, i] + 0.05,
+                features[i])
+        
+    # Affichage des lignes horizontales et verticales
+    plt.plot([-1, 1], [0, 0], color='grey', ls='--')
+    plt.plot([0, 0], [-1, 1], color='grey', ls='--')
+
+    # Nom des axes, avec le pourcentage d'inertie expliqué
+    plt.xlabel('F{} ({}%)'.format(x+1, round(100*pca.explained_variance_ratio_[x],1)))
+    plt.ylabel('F{} ({}%)'.format(y+1, round(100*pca.explained_variance_ratio_[y],1)))
+
+    plt.title("Cercle des corrélations (F{} et F{})".format(x+1, y+1))
+
+    # Le cercle 
+    an = np.linspace(0, 2 * np.pi, 100)
+    plt.plot(np.cos(an), np.sin(an))  # Add a unit circle for scale
+
+    # Axes et display
+    plt.axis('equal')
+    plt.show(block=False)
+    
+    
+#############################################################################################################################
+def better_product(data, selected_product_code=None): 
+    """
+    Retourne le nom du produits sélectionné ainsi que ses score sante et environnement.
+    
+    Retourne s'il existe : 
+       - une proposition du produit le plus similaire avec une meilleure note santé.
+       - une proposition du produit le plus similaire avec une meilleure note environnement.
+    
+    Retourne le produit de la même catégorie avec la meilleure note globale.
+   
+    data : le dataframe avec les références des produits, data par défaut. 
+    selected_product_code : le code du produit sélectionné, None par défaut. 
+    """
+
+    # Traitement des erreurs : 
+    if selected_product_code is None: 
+        raise ValueError('selected_product_code est vide.')
+    elif selected_product_code not in data['code'].values : 
+        print("Le produit sélectionné ne fait pas partie de la base de donnée.")
+        return 
+
+    # Création des données du produit sélectionné : 
+    variables = ['label_bio', 'label_vege', 'energy_100g', 'fat_100g','saturated-fat_100g',
+                 'salt_100g', 'sugars_100g', 'proteins_100g', 'fiber_100g', 'vitamin-a_100g',
+                 'beta-carotene_100g', 'vitamin-d_100g', 'vitamin-e_100g', 'vitamin-k_100g',
+                 'vitamin-c_100g', 'vitamin-b1_100g', 'vitamin-b2_100g', 'vitamin-pp_100g',
+                 'vitamin-b6_100g', 'vitamin-b9_100g', 'vitamin-b12_100g', 'biotin_100g']
+    
+    selected_index = data.loc[data['code'] == selected_product_code].index
+    selected_serie = data.loc[selected_index, variables].squeeze()
+
+    selected_product = data.loc[selected_index]
+
+    #______________________________________________________________________________________________________
+
+    # Filtrage du dataset : 
+    mask_1 = data['pnns_groups_1'] == selected_product['pnns_groups_1'].values[0]
+    mask_2 = data['pnns_groups_2'] == selected_product['pnns_groups_2'].values[0]
+    
+    data = data.loc[mask_1 & mask_2].drop(selected_index)
+    
+    #______________________________________________________________________________________________________
+    
+    selected_name = selected_product['product_name'].values[0]
+    data['similarity_name'] = data['product_name'].apply(lambda x: fuzz.token_set_ratio(x, selected_name))
+
+    #______________________________________________________________________________________________________
+
+    # Sélection des meilleurs produits tout confondu de la catégorie : 
+    data_best_product = data.loc[data['score_tot'] == 'A']
+    note_min = data_best_product['note_tot'].min()
+
+        # Meilleur produit tout confondu de la catégorie :
+    best_product_categ = data_best_product[data_best_product['note_tot'] == note_min]
+
+    #______________________________________________________________________________________________________
+
+    # Sélection du produit le plus similaire avec une meilleure note santé :
+    mask_1 = data['note_sante'] < selected_product['note_sante'].values[0]
+    data_sante = data[mask_1]
+    
+    mask_2 = data_sante['similarity_name'] == data_sante['similarity_name'].max()
+    similar_product_best_sante = data_sante[mask_2]
+    
+
+    # Sélection du produit le plus similaire avec une meilleure note environnement :    
+    mask_1 = data['note_environnement'] < selected_product['note_environnement'].values[0]
+    data_envi = data[mask_1]
+    
+    mask_2 = data_envi['similarity_name'] == data_envi['similarity_name'].max()
+    similar_product_best_environnement = data_envi[mask_2]
+
+  #______________________________________________________________________________________________________
+
+    # Retour du produits sélectionné : 
+    print('--'*20+'\n')
+    print("Vous avez choisi le produit :", selected_product['product_name'].values[0], '\n')
+    print("Score santé du produit :", selected_product['score_sante'].values[0])
+    print("Score environnement du produit :", selected_product['score_environnement'].values[0],'\n')
+    print('--'*20+'\n')
+
+    # Retour des produits similaires : 
+    print("Proposition de produits similaires :\n")
+    
+    print(f"Le produit {similar_product_best_sante['product_name'].values[0]} "
+          "sera le plus similaire avec un meilleur impact sur votre santé.")
+    print("Score santé :", similar_product_best_sante['score_sante'].values[0], '\n')
+    
+    print(f"Le produit {similar_product_best_environnement['product_name'].values[0]} "
+          "sera le plus similaire avec un meilleur impact sur l'environnement.")
+    print("Score environnement :", similar_product_best_environnement['score_environnement'].values[0], '\n')
+
+    print('--'*20+'\n')
+
+    # Retour du meilleur produit de la catégorie : 
+    print(f"Proposition du meilleur produit de la catégorie {best_product_categ['pnns_groups_1'].values[0]} | "
+          f"{best_product_categ['pnns_groups_2'].values[0]} :\n")
+    print(f"Le produit {best_product_categ['product_name'].values[0]} "
+          "sera le produit avec le meilleur impact global de cette catégorie.")
+    print(f"Score global : {best_product_categ['score_tot'].values[0]}")
+    print(f"Score santé : {best_product_categ['score_sante'].values[0]}")
+    print(f"Score environnement : {best_product_categ['score_environnement'].values[0]}")
+
+    return
